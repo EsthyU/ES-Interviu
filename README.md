@@ -23,7 +23,11 @@ Plain files, no build step. Everything you write and every score stays on your d
 
 ## The Romanian voice
 
-iPhones speak Romanian only if a Romanian voice is installed. Settings → Accessibility → Spoken Content → Voices → Romanian, and download one. Until then the audio buttons stay silent, and the app shows how to say every phrase in English letters instead.
+iPhones speak Romanian properly only if a Romanian voice is installed: **Settings → Accessibility → Spoken Content → Voices → Romanian**, and download one.
+
+Without it the app no longer stays silent. It falls back to the closest voice your phone has, in this order: Romanian, Italian, Spanish, Portuguese, Catalan, French, then anything. The words are correct, the accent is not, so install the Romanian voice before you trust the pronunciation.
+
+Under Settings on the Home tab there is a **Test the audio** button and a line naming the voice in use. If you hear nothing at all: check the silent switch on the side of the phone, turn the volume up, and tap any play button once (iPhone only allows sound after a tap).
 
 ## What's inside
 

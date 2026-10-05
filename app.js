@@ -65,25 +65,54 @@ const gPick = (mForm, fForm) => G() === "m" ? mForm : fForm;
    speech
    ===================================================================== */
 let voices = [];
-function loadVoices(){ try { voices = speechSynthesis.getVoices() || []; } catch(e){ voices = []; } }
-if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+let speechUnlocked = false;
+function loadVoices(){ try { voices = speechSynthesis.getVoices() || []; } catch(e){ voices = []; } return voices; }
+if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged = () => { loadVoices(); if(UI.tab === "home" && !UI.view) render(true); }; }
 const roVoices = () => voices.filter(v => /^ro/i.test(v.lang));
 function hasRo(){ return roVoices().length > 0; }
+/* Romanian first; then the languages whose vowels are closest; then anything that speaks. */
+const NEAR = [/^ro/i, /^it/i, /^es/i, /^pt/i, /^ca/i, /^fr/i];
 function pickVoice(){
   if(!voices.length) loadVoices();
   const want = S.settings.voice;
-  return roVoices().find(v => v.name === want) || roVoices()[0] || null;
+  if(want){ const exact = voices.find(v => v.name === want); if(exact) return exact; }
+  for(const re of NEAR){ const v = voices.find(x => re.test(x.lang)); if(v) return v; }
+  return voices[0] || null;
 }
-function speak(text, onend){
-  if(!window.speechSynthesis){ if(onend) onend(); return; }
+function voiceLabel(){
+  const v = pickVoice();
+  if(!v) return "no voice available on this device";
+  return `${v.name} (${v.lang})${/^ro/i.test(v.lang) ? " — Romanian" : " — not Romanian, so the accent is approximate"}`;
+}
+/* iOS swallows the first utterance unless speech was started by a tap. */
+function unlockSpeech(){
+  if(speechUnlocked || !window.speechSynthesis) return;
+  try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); speechUnlocked = true; } catch(e){}
+}
+document.addEventListener("pointerdown", unlockSpeech, {once:true});
+document.addEventListener("touchstart", unlockSpeech, {once:true});
+
+function speak(text, onend, retry){
+  if(!window.speechSynthesis){ toast("This browser can't speak. Try Safari."); if(onend) onend(); return; }
+  unlockSpeech();
   try { speechSynthesis.cancel(); } catch(e){}
+  if(!voices.length){
+    loadVoices();
+    if(!voices.length && !retry){ setTimeout(()=>speak(text, onend, true), 450); return; }
+  }
   const u = new SpeechSynthesisUtterance(String(text).replace(/\s*\/\s*/g, ", "));
   const v = pickVoice();
-  if(v){ u.voice = v; u.lang = v.lang; } else u.lang = "ro-RO";
+  u.lang = (v && v.lang) || "ro-RO";
+  try { if(v) u.voice = v; } catch(e){}   // a bad voice object must never stop playback
   u.rate = +S.settings.rate || 0.9;
+  u.volume = 1; u.pitch = 1;
+  let spoke = false;
+  u.onstart = () => { spoke = true; };
   u.onend = () => { if(onend) onend(); };
-  u.onerror = () => { if(onend) onend(); };
+  u.onerror = (e) => { if(!spoke) toast("The voice didn't play. Check the silent switch and the volume."); if(onend) onend(); };
+  try { speechSynthesis.resume(); } catch(e){}
   speechSynthesis.speak(u);
+  setTimeout(() => { if(!spoke && !speechSynthesis.speaking && !retry){ speak(text, onend, true); } }, 700);
 }
 const stopSpeak = () => { try { speechSynthesis.cancel(); } catch(e){} };
 
@@ -280,7 +309,8 @@ const VIEWS = {
       <button class="btn ghost block" data-a="openStory">Open the builder</button>`)}
 
     ${!hasRo() ? card(`<div class="card-title serif" style="margin-bottom:8px">${ic("ear",26)}<div>Add the Romanian voice</div></div>
-      <p class="muted small" style="margin:0">Your phone has no Romanian voice installed yet, so the audio buttons stay silent. On iPhone: Settings → Accessibility → Spoken Content → Voices → Romanian, and download one. Every phrase in this app also shows how to say it in English letters.</p>`,"warn-card") : ""}
+      <p class="muted small" style="margin:0 0 10px">No Romanian voice is installed on this phone, so the app is reading Romanian with ${esc((pickVoice()||{}).name || "another")} instead. The words are right, the accent isn't. To fix it: Settings → Accessibility → Spoken Content → Voices → Romanian, download a voice, then come back and pick it below.</p>
+      <button class="btn sm" data-a="testVoice">Test the audio</button>`,"warn-card") : ""}
 
     ${card(`<div class="card-head"><div class="card-title serif">${ic("gear",26)}<div>Settings</div></div></div>
       <div class="row"><div class="name">Your name</div><input class="field sm" style="width:150px" value="${esc(S.settings.name)}" data-k="name" placeholder="Name"></div>
@@ -288,7 +318,8 @@ const VIEWS = {
         <div class="seg small"><button class="${G()==="f"?"on":""}" data-a="setGender" data-g="f">Woman</button><button class="${G()==="m"?"on":""}" data-a="setGender" data-g="m">Man</button></div></div>
       <div class="row"><div class="name">Interview date</div><input class="field sm" type="date" style="width:160px" value="${esc(S.settings.interviewDate)}" data-k="interviewDate"></div>
       <div class="row"><div class="name">Voice speed<small>slower is easier to copy</small></div><input class="field sm" style="width:80px;text-align:right" inputmode="decimal" value="${S.settings.rate}" data-k="rate"></div>
-      <div class="row"><div class="name">Romanian voice</div><select class="field sm" style="max-width:180px" data-k="voice"><option value="">Automatic</option>${roVoices().map(v=>`<option ${v.name===S.settings.voice?"selected":""}>${esc(v.name)}</option>`).join("")}</select></div>
+      <div class="row"><div class="name">Voice<small>${esc(voiceLabel())}</small></div><select class="field sm" style="max-width:180px" data-k="voice"><option value="">Automatic</option>${voices.map(v=>`<option ${v.name===S.settings.voice?"selected":""}>${(/^ro/i.test(v.lang)?"★ ":"")+esc(v.name)+" · "+esc(v.lang)}</option>`).join("")}</select></div>
+      <div class="row"><div class="name">Test the audio<small>you should hear: Bună ziua</small></div><button class="btn sm" data-a="testVoice">Play</button></div>
       <div class="row"><div class="name">Record my speaking</div><button class="switch ${S.settings.mic?"on":""}" data-a="toggleMic"></button></div>
       <div class="row"><div class="name">Appearance</div><select class="field sm" style="width:130px" data-k="theme">${[["royal","Royal (dark)"],["light","Light"]].map(([v,l])=>`<option value="${v}" ${v===S.settings.theme?"selected":""}>${l}</option>`).join("")}</select></div>
       <div class="grid2" style="margin-top:12px"><button class="btn" data-a="export">Export JSON</button><button class="btn ghost" data-a="import">Import JSON</button></div>
@@ -410,7 +441,7 @@ const PRACTICE = {
     <button class="btn ghost block" data-a="startCards">Deal the cards</button>`)}`;
  },
  listen(){
-  return `${!hasRo() ? card(`<p class="muted small" style="margin:0">No Romanian voice is installed on this phone yet, so listening drills stay silent. iPhone: Settings → Accessibility → Spoken Content → Voices → Romanian.</p>`,"warn-card") : ""}
+  return `${!hasRo() ? card(`<p class="muted small" style="margin:0">These drills are being read by ${esc((pickVoice()||{}).name || "a non-Romanian voice")}, because no Romanian voice is installed. Add one in iPhone Settings → Accessibility → Spoken Content → Voices → Romanian for the real accent.</p>`,"warn-card") : ""}
   ${Object.keys(LISTEN).map(k=>{ const d = LISTEN[k], st = drillStats(d.kind);
     return card(`<div class="card-head" style="margin-bottom:8px"><div class="card-title serif" style="font-size:15px">${esc(d.name)}<small>${esc(d.desc)}</small></div>
       ${st.n?`<span class="badge ${st.recent>=80?"good":st.recent>=60?"warn":"bad"}">${Math.round(st.recent)}%</span>`:""}</div>
@@ -789,6 +820,7 @@ const ACTIONS = {
  setGender(b){ S.settings.gender = b.dataset.g; save(); render(true); },
  toggleMic(){ S.settings.mic = !S.settings.mic; save(); render(true); },
  say(b){ speak(b.dataset.t); },
+ testVoice(){ loadVoices(); speak("Bună ziua! Mă numesc Esther. Îmi place foarte mult mâncarea românească.", null); toast(voiceLabel()); render(true); },
  sayText(b){ speak(b.dataset.t); },
  openSession(b){ UI.session = b.dataset.id; UI.view = "session"; render(); },
  closeSession(){ UI.view = null; UI.tab = UI.tab === "home" ? "home" : "course"; render(); },
@@ -945,5 +977,6 @@ document.getElementById("importFile").addEventListener("change", e => {
 /* boot */
 document.body.insertAdjacentHTML("afterbegin", DEFS);
 render();
-setTimeout(()=>{ if(!hasRo()) loadVoices(); if(UI.tab === "home") render(true); }, 900);
+setTimeout(()=>{ loadVoices(); if(!UI.view) render(true); }, 800);
+setTimeout(()=>{ loadVoices(); if(!UI.view) render(true); }, 2500);
 if("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(()=>{});
