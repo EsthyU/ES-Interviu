@@ -41,7 +41,7 @@ function ageSentence(n){ return `Am ${roNumber(n)} ${needsDe(n)?"de ":""}ani.`; 
    ===================================================================== */
 function blank(){
   return { app:"es-interviu", version:1,
-    settings:{ name:"", gender:"f", theme:"royal", rate:0.9, voice:"", mic:true, interviewDate:"", audio:"clips" },
+    settings:{ name:"", gender:"f", theme:"royal", rate:0.9, voice:"", mic:true, interviewDate:"", audio:"auto" },
     read:{}, hw:{}, drills:[], sims:[], exams:[], story:{}, notes:{} };
 }
 function normalize(d){
@@ -64,6 +64,71 @@ const gPick = (mForm, fForm) => G() === "m" ? mForm : fForm;
 /* =====================================================================
    speech
    ===================================================================== */
+/* ---------- human recordings, kept in this device's database ---------- */
+let IDB = null, HUMAN = new Set();
+function idbOpen(){
+  return new Promise(res => {
+    if(IDB) return res(IDB);
+    try {
+      const r = indexedDB.open("esinterviu-audio", 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore("clips"); };
+      r.onsuccess = () => { IDB = r.result; res(IDB); };
+      r.onerror = () => res(null);
+    } catch(e){ res(null); }
+  });
+}
+function idbPut(key, blob){
+  return idbOpen().then(db => new Promise(res => {
+    if(!db) return res(false);
+    const tx = db.transaction("clips","readwrite");
+    tx.objectStore("clips").put(blob, key);
+    tx.oncomplete = () => { HUMAN.add(key); res(true); };
+    tx.onerror = () => res(false);
+  }));
+}
+function idbGet(key){
+  return idbOpen().then(db => new Promise(res => {
+    if(!db) return res(null);
+    const rq = db.transaction("clips","readonly").objectStore("clips").get(key);
+    rq.onsuccess = () => res(rq.result || null);
+    rq.onerror = () => res(null);
+  }));
+}
+function idbDel(key){
+  return idbOpen().then(db => new Promise(res => {
+    if(!db) return res(false);
+    const tx = db.transaction("clips","readwrite");
+    tx.objectStore("clips").delete(key);
+    tx.oncomplete = () => { HUMAN.delete(key); res(true); };
+    tx.onerror = () => res(false);
+  }));
+}
+function idbKeys(){
+  return idbOpen().then(db => new Promise(res => {
+    if(!db) return res([]);
+    const rq = db.transaction("clips","readonly").objectStore("clips").getAllKeys();
+    rq.onsuccess = () => res(rq.result || []);
+    rq.onerror = () => res([]);
+  }));
+}
+idbKeys().then(ks => { HUMAN = new Set(ks); if(!UI.view) render(true); });
+let humanUrl = null;
+function playHuman(key, onend){
+  return idbGet(key).then(blob => {
+    if(!blob) return false;
+    try {
+      if(clipAudio){ clipAudio.pause(); clipAudio = null; }
+      if(humanUrl){ URL.revokeObjectURL(humanUrl); humanUrl = null; }
+      humanUrl = URL.createObjectURL(blob);
+      const a = new Audio(humanUrl);
+      a.onended = () => { if(onend) onend(); };
+      clipAudio = a;
+      const pr = a.play(); if(pr && pr.catch) pr.catch(()=>{});
+      return true;
+    } catch(e){ return false; }
+  });
+}
+
 /* unlock HTML audio on the first tap — iPhones block playback before that */
 let audioUnlocked = false, unlockEl = null;
 function unlockAudio(){
@@ -154,7 +219,11 @@ function speak(text, onend){
   text0 = text;
   unlockSpeech();
   stopSpeak();
-  if(S.settings.audio !== "voice"){
+  const hk = fnv(String(text).trim());
+  if(HUMAN.has(hk)){ playHuman(hk, onend); return; }   // a real voice always wins
+  const mode = S.settings.audio || "auto";
+  const useVoice = mode === "voice" || (mode === "auto" && hasRo());
+  if(!useVoice){
     const key = clipFor(text);
     if(key && playClip(key, onend)) return;
   }
@@ -177,10 +246,15 @@ function speakTTS(text, onend, retry){
   let spoke = false;
   u.onstart = () => { spoke = true; };
   u.onend = () => { if(onend) onend(); };
-  u.onerror = (e) => { if(!spoke) toast("The voice didn't play. Check the silent switch and the volume."); if(onend) onend(); };
+  u.onerror = () => { if(!spoke){ const k = clipFor(text); if(k && playClip(k, onend)) return; toast("No sound. Check the side switch and the volume."); } if(onend) onend(); };
   try { speechSynthesis.resume(); } catch(e){}
   speechSynthesis.speak(u);
-  setTimeout(() => { if(!spoke && !speechSynthesis.speaking && !retry){ speakTTS(text, onend, true); } }, 700);
+  setTimeout(() => {
+    if(spoke || speechSynthesis.speaking) return;
+    const k = clipFor(text);
+    if(k && playClip(k, onend)) return;        // phone voice stayed silent — use the recording
+    if(!retry) speakTTS(text, onend, true);
+  }, 700);
 }
 const stopSpeak = () => { try { speechSynthesis.cancel(); } catch(e){} try { if(clipAudio){ clipAudio.pause(); clipAudio = null; } } catch(e){} };
 
@@ -327,14 +401,34 @@ function ring(pct, size=118, stroke=11, color="var(--gold)", inner=""){
 }
 const say = (txt, label) => `<button class="say" data-a="say" data-t="${esc(txt)}" aria-label="Play ${esc(label||"audio")}">${SPEAKER}</button>`;
 function phraseRow(p, opts={}){
+  const k = fnv(String(p.ro).trim()), human = HUMAN.has(k);
   return `<div class="phrase">
-    <div class="ph-main"><div class="ro">${esc(p.ro)}</div>
+    <div class="ph-main"><div class="ro">${esc(p.ro)}${human?' <span class="humanmark" title="recorded by a person">●</span>':""}</div>
       ${p.pr?`<div class="pr">${esc(p.pr)}</div>`:""}
       <div class="en">${esc(p.en)}</div></div>
-    ${say(p.ro, p.ro)}</div>`;
+    ${say(p.ro, p.ro)}
+    <button class="say rec ${human?"has":""}" data-a="recPhrase" data-t="${esc(p.ro)}" aria-label="Record this phrase">${MIC_ICON}</button></div>`;
 }
 const card = (inner, cls="") => `<div class="card ${cls}">${inner}</div>`;
 const tile = (label, v, s="") => `<div class="tile"><div class="eyebrow">${label}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`;
+
+function recorderView(){
+  const t = UI.recPhrase, k = fnv(String(t).trim()), human = HUMAN.has(k);
+  return `<div class="reader"><div class="rbar"><button class="icon-btn" data-a="closeRec">‹</button>
+      <div><b>Record a human voice</b><small>your teacher, a friend, or a native speaker</small></div><div></div></div>
+    <div class="stack">
+      ${card(`<div class="eyebrow" style="margin-bottom:8px">The phrase</div>
+        <div class="ro big">${esc(t)}</div>
+        <div class="btnrow" style="margin-top:14px">
+          ${UI.recOn ? `<button class="btn" data-a="recStop">Stop recording</button>` : `<button class="btn" data-a="recGo">${human?"Record again":"Start recording"}</button>`}
+          ${human ? `<button class="btn ghost" data-a="recPlay" data-k="${k}">Play what's saved</button>` : ""}
+          ${human ? `<button class="btn quiet" data-a="recDelete" data-k="${k}">Delete</button>` : ""}
+        </div>
+        ${UI.recOn ? `<div class="muted small" style="margin-top:12px">Recording. Say the phrase, then tap stop.</div>` : ""}
+        ${UI.recSaved ? `<div class="markcard good" style="margin-top:12px"><b>Saved</b><div>This phrase will now play in that voice everywhere in the app.</div></div>` : ""}`)}
+      ${card(`<p class="muted small" style="margin:0">Recordings are stored on this phone only. They survive closing the app, and they override both the built-in audio and the phone voice.</p>`)}
+    </div></div>`;
+}
 
 /* =====================================================================
    views
@@ -376,9 +470,15 @@ const VIEWS = {
       <p class="muted small" style="margin:0 0 12px">This paragraph answers half the interview before it is asked. Build yours from the model, then learn it by heart.</p>
       <button class="btn ghost block" data-a="openStory">Open the builder</button>`)}
 
-    ${(!hasRo() && S.settings.audio === "voice") ? card(`<div class="card-title serif" style="margin-bottom:8px">${ic("ear",26)}<div>Add the Romanian voice</div></div>
-      <p class="muted small" style="margin:0 0 10px">Audio is playing from the recordings built into the app, so it works without any setup. They are machine-made and flat. For a natural voice: Settings → Accessibility → Spoken Content → Voices → Romanian, download Ioana, then set Audio source below to your phone's voice.</p>
-      <button class="btn sm" data-a="testVoice">Test the audio</button>`,"warn-card") : ""}
+    ${!hasRo() ? card(`<div class="card-title serif" style="margin-bottom:10px">${ic("ear",26)}<div>Get the natural voice<small>two minutes, free</small></div></div>
+      <p class="muted small" style="margin:0 0 10px">You are hearing the recordings built into the app. They are machine-made and flat. Your iPhone can download a real Romanian voice, Ioana, which sounds like a person.</p>
+      <ol class="steps" style="margin-bottom:12px"><li>iPhone <b>Settings → Accessibility</b></li><li><b>Spoken Content → Voices → Romanian</b></li><li>Tap <b>Ioana</b> and let it download</li><li>Come back and tap <b>Check again</b></li></ol>
+      <div class="btnrow"><button class="btn" data-a="recheckVoice">Check again</button><button class="btn ghost" data-a="testVoice">Test the audio</button></div>`,"warn-card")
+      : card(`<div class="card-title serif" style="margin-bottom:8px">${ic("ear",26)}<div>Natural voice is on<small>${esc((pickVoice()||{}).name || "")}</small></div></div>
+      <button class="btn sm ghost" data-a="testVoice">Test the audio</button>`)}
+
+    ${card(`<div class="card-title serif" style="margin-bottom:8px">${ic("mic",26)}<div>Record a real person<small>${HUMAN.size ? HUMAN.size + " phrases recorded" : "the most natural option of all"}</small></div></div>
+      <p class="muted small" style="margin:0">Tap the dashed microphone beside any phrase and record your teacher, a Romanian friend, or yourself. That recording then plays everywhere in the app, ahead of any machine voice, and stays on this phone.</p>`)}
 
     ${card(`<div class="card-head"><div class="card-title serif">${ic("gear",26)}<div>Settings</div></div></div>
       <div class="row"><div class="name">Your name</div><input class="field sm" style="width:150px" value="${esc(S.settings.name)}" data-k="name" placeholder="Name"></div>
@@ -386,11 +486,9 @@ const VIEWS = {
         <div class="seg small"><button class="${G()==="f"?"on":""}" data-a="setGender" data-g="f">Woman</button><button class="${G()==="m"?"on":""}" data-a="setGender" data-g="m">Man</button></div></div>
       <div class="row"><div class="name">Interview date</div><input class="field sm" type="date" style="width:160px" value="${esc(S.settings.interviewDate)}" data-k="interviewDate"></div>
       <div class="row"><div class="name">Voice speed<small>slower is easier to copy</small></div><input class="field sm" style="width:80px;text-align:right" inputmode="decimal" value="${S.settings.rate}" data-k="rate"></div>
-      <div class="row"><div class="name">Audio<small>${S.settings.audio==="voice"?"your phone's voice":"recorded clips built into the app"}</small></div>
-        <div class="seg small"><button class="${S.settings.audio!=="voice"?"on":""}" data-a="setAudio" data-v="clips">Recorded</button><button class="${S.settings.audio==="voice"?"on":""}" data-a="setAudio" data-v="voice">Phone voice</button></div></div>
       <div class="row"><div class="name">Phone voice<small>${esc(voiceLabel())}</small></div><select class="field sm" style="max-width:180px" data-k="voice"><option value="">Automatic</option>${voices.map(v=>`<option ${v.name===S.settings.voice?"selected":""}>${(/^ro/i.test(v.lang)?"★ ":"")+esc(v.name)+" · "+esc(v.lang)}</option>`).join("")}</select></div>
-      <div class="row"><div class="name">Audio source<small>${S.settings.audio==="voice"?"your phone's own voice":"the recordings that ship with the app"}</small></div>
-        <select class="field sm" style="width:170px" data-k="audio">${[["auto","Built-in recordings"],["voice","My phone's voice"]].map(([v,l])=>`<option value="${v}" ${v===(S.settings.audio||"auto")?"selected":""}>${l}</option>`).join("")}</select></div>
+      <div class="row"><div class="name">Audio source<small>${(S.settings.audio||"auto")==="voice" ? "your phone's own voice" : (S.settings.audio||"auto")==="clips" ? "the recordings built into the app" : (hasRo() ? "your phone's Romanian voice" : "built-in recordings, until a Romanian voice is installed")}</small></div>
+        <select class="field sm" style="width:170px" data-k="audio">${[["auto","Automatic"],["clips","Built-in recordings"],["voice","My phone's voice"]].map(([v,l])=>`<option value="${v}" ${v===(S.settings.audio||"auto")?"selected":""}>${l}</option>`).join("")}</select></div>
       <div class="row"><div class="name">Test the audio<small>you should hear: Bună ziua</small></div><button class="btn sm" data-a="testVoice">Play</button></div>
       <div class="row"><div class="name">Record my speaking</div><button class="switch ${S.settings.mic?"on":""}" data-a="toggleMic"></button></div>
       <div class="row"><div class="name">Appearance</div><select class="field sm" style="width:130px" data-k="theme">${[["royal","Royal (dark)"],["light","Light"]].map(([v,l])=>`<option value="${v}" ${v===S.settings.theme?"selected":""}>${l}</option>`).join("")}</select></div>
@@ -872,6 +970,7 @@ function render(keep){
   else if(UI.view === "run"){ app.innerHTML = runView(); bar.style.display = "none"; }
   else if(UI.view === "story"){ app.innerHTML = storyView(); bar.style.display = "none"; }
   else if(UI.view === "exam"){ app.innerHTML = examView(); bar.style.display = "none"; }
+  else if(UI.view === "rec"){ app.innerHTML = recorderView(); bar.style.display = "none"; }
   else {
     bar.style.display = "flex";
     const t = TABS.find(x=>x.id===UI.tab);
@@ -892,6 +991,24 @@ const ACTIONS = {
  setGender(b){ S.settings.gender = b.dataset.g; save(); render(true); },
  toggleMic(){ S.settings.mic = !S.settings.mic; save(); render(true); },
  say(b){ speak(b.dataset.t); },
+ recheckVoice(){ loadVoices(); render(true); toast(hasRo() ? "Found it: " + ((pickVoice()||{}).name||"Romanian voice") : "Still no Romanian voice. Finish the download, then tap again."); },
+ recPhrase(b){ UI.recPhrase = b.dataset.t; UI.recSaved = false; UI.recOn = false; UI.view = "rec"; render(); },
+ closeRec(){ if(REC.on) recStop(); UI.view = null; UI.recPhrase = null; render(); },
+ async recGo(){ const ok = await recStart(); if(!ok){ toast("No microphone permission"); return; } UI.recOn = true; UI.recSaved = false; render(true); },
+ async recStop(){
+   const url = await recStop();
+   UI.recOn = false;
+   try {
+     const blob = await fetch(url).then(r => r.blob());
+     const k = fnv(String(UI.recPhrase).trim());
+     const ok = await idbPut(k, blob);
+     UI.recSaved = ok;
+     toast(ok ? "Saved in your own voice" : "Couldn't save on this device");
+   } catch(e){ toast("Couldn't save the recording"); }
+   render(true);
+ },
+ recPlay(b){ playHuman(b.dataset.k); },
+ async recDelete(b){ if(!confirm("Delete this recording?")) return; await idbDel(b.dataset.k); UI.recSaved = false; toast("Deleted"); render(true); },
  testVoice(){ loadVoices(); const t = "Bună ziua! Mă numesc Esther.";
    speak(t, null);
    toast(S.settings.audio === "voice" ? voiceLabel() : (clipFor(t) ? "Playing the recorded clip" : "No clip found — using the phone voice"));

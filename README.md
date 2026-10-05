@@ -22,7 +22,13 @@ Plain files, no build step. Everything you write and every score stays on your d
 2. Settings → Pages → Deploy from a branch → `main` → `/ (root)` → Save.
 3. Open `https://esthyu.github.io/ES-Interviu/` in Safari, then Share → Add to Home Screen.
 
-## Audio
+## Audio — three sources, best first
+
+1. **A real person.** Tap the dashed microphone beside any phrase and record your teacher, a Romanian friend or yourself. That recording plays everywhere in the app from then on, ahead of every machine voice. It is stored on the phone, survives closing the app, and can be re-recorded or deleted per phrase.
+2. **Your phone's Romanian voice.** iPhone Settings → Accessibility → Spoken Content → Voices → Romanian → **Ioana**. She is a neural voice and sounds like a person. The app detects her automatically and switches to her; Home has a Check again button.
+3. **The built-in recordings.** Used when neither of the above exists, so sound always works with no setup.
+
+## Audio files
 
 The app ships with its own Romanian audio in a single file, `audio.mp3` (about 3.4 MB), with `audio-index.js` saying where each phrase sits inside it. Sound works the moment you open the app, with no setup, online or offline. The recordings are machine-made, so they are clear and correctly stressed but flat.
 
