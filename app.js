@@ -41,7 +41,7 @@ function ageSentence(n){ return `Am ${roNumber(n)} ${needsDe(n)?"de ":""}ani.`; 
    ===================================================================== */
 function blank(){
   return { app:"es-interviu", version:1,
-    settings:{ name:"", gender:"f", theme:"royal", rate:0.9, voice:"", mic:true, interviewDate:"" },
+    settings:{ name:"", gender:"f", theme:"royal", rate:0.9, voice:"", mic:true, interviewDate:"", audio:"clips" },
     read:{}, hw:{}, drills:[], sims:[], exams:[], story:{}, notes:{} };
 }
 function normalize(d){
@@ -64,6 +64,18 @@ const gPick = (mForm, fForm) => G() === "m" ? mForm : fForm;
 /* =====================================================================
    speech
    ===================================================================== */
+/* unlock HTML audio on the first tap — iPhones block playback before that */
+let audioUnlocked = false, unlockEl = null;
+function unlockAudio(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    unlockEl = unlockEl || new Audio("data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//tAwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7v///////////////////////////////8AAAAATGF2YzU4LjU0AAAAAAAAAAAAAAAAJAAAAAAAAAAAAYa4Z+RzAAAAAAAAAAAAAAAAAAAA//sQxAADwAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV");
+    unlockEl.volume = 0;
+    const q = unlockEl.play(); if(q && q.catch) q.catch(()=>{});
+  } catch(e){}
+}
+
 let voices = [];
 let speechUnlocked = false;
 function loadVoices(){ try { voices = speechSynthesis.getVoices() || []; } catch(e){ voices = []; } return voices; }
@@ -89,16 +101,72 @@ function unlockSpeech(){
   if(speechUnlocked || !window.speechSynthesis) return;
   try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); speechUnlocked = true; } catch(e){}
 }
-document.addEventListener("pointerdown", unlockSpeech, {once:true});
-document.addEventListener("touchstart", unlockSpeech, {once:true});
+function unlockAll(){ unlockAudio(); unlockSpeech(); }
+document.addEventListener("pointerdown", unlockAll, {once:true});
+document.addEventListener("touchstart", unlockAll, {once:true});
 
-function speak(text, onend, retry){
-  if(!window.speechSynthesis){ toast("This browser can't speak. Try Safari."); if(onend) onend(); return; }
+/* Pre-recorded Romanian clips ship with the app as ONE bundled file; each
+   phrase is a byte range inside it. The phone voice is the fallback. */
+let CLIPS = window.CLIP_INDEX || null, clipAudio = null, clipBuf = null, clipBufLoading = null, clipUrl = null;
+function fnv(str){
+  let h = 0x811c9dc5;
+  const bytes = new TextEncoder().encode(str);
+  for(const b of bytes){ h ^= b; h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8,"0");
+}
+const clipFor = text => (CLIPS && CLIPS[fnv(String(text).trim())]) ? fnv(String(text).trim()) : null;
+function loadBundle(){
+  if(clipBuf) return Promise.resolve(clipBuf);
+  if(clipBufLoading) return clipBufLoading;
+  clipBufLoading = fetch("audio.mp3", {cache:"force-cache"})
+    .then(r => r.ok ? r.arrayBuffer() : null)
+    .then(buf => { clipBuf = buf; return buf; })
+    .catch(() => null);
+  return clipBufLoading;
+}
+function playSlice(key, onend){
+  const span = CLIPS[key];
+  if(!span || !clipBuf) return false;
+  try {
+    if(clipAudio){ clipAudio.pause(); clipAudio = null; }
+    if(clipUrl){ URL.revokeObjectURL(clipUrl); clipUrl = null; }
+    const blob = new Blob([clipBuf.slice(span[0], span[0] + span[1])], {type:"audio/mpeg"});
+    clipUrl = URL.createObjectURL(blob);
+    const a = new Audio(clipUrl);
+    a.playbackRate = Math.max(0.6, Math.min(1.3, (+S.settings.rate || 0.9) + 0.1));
+    a.onended = () => { if(onend) onend(); };
+    a.onerror = () => { speakTTS(text0, onend); };
+    clipAudio = a;
+    const pr = a.play();
+    if(pr && pr.catch) pr.catch(() => { speakTTS(text0, onend); });
+    return true;
+  } catch(e){ return false; }
+}
+function playClip(key, onend){
+  if(clipBuf) return playSlice(key, onend);
+  loadBundle().then(buf => { if(buf) playSlice(key, onend); else speakTTS(text0, onend); });
+  return true;   // the bundle is on its way; nothing else should take over
+}
+loadBundle();
+
+let text0 = "";
+function speak(text, onend){
+  text0 = text;
+  unlockSpeech();
+  stopSpeak();
+  if(S.settings.audio !== "voice"){
+    const key = clipFor(text);
+    if(key && playClip(key, onend)) return;
+  }
+  speakTTS(text, onend);
+}
+function speakTTS(text, onend, retry){
+  if(!window.speechSynthesis){ toast("No audio available for this phrase."); if(onend) onend(); return; }
   unlockSpeech();
   try { speechSynthesis.cancel(); } catch(e){}
   if(!voices.length){
     loadVoices();
-    if(!voices.length && !retry){ setTimeout(()=>speak(text, onend, true), 450); return; }
+    if(!voices.length && !retry){ setTimeout(()=>speakTTS(text, onend, true), 450); return; }
   }
   const u = new SpeechSynthesisUtterance(String(text).replace(/\s*\/\s*/g, ", "));
   const v = pickVoice();
@@ -112,9 +180,9 @@ function speak(text, onend, retry){
   u.onerror = (e) => { if(!spoke) toast("The voice didn't play. Check the silent switch and the volume."); if(onend) onend(); };
   try { speechSynthesis.resume(); } catch(e){}
   speechSynthesis.speak(u);
-  setTimeout(() => { if(!spoke && !speechSynthesis.speaking && !retry){ speak(text, onend, true); } }, 700);
+  setTimeout(() => { if(!spoke && !speechSynthesis.speaking && !retry){ speakTTS(text, onend, true); } }, 700);
 }
-const stopSpeak = () => { try { speechSynthesis.cancel(); } catch(e){} };
+const stopSpeak = () => { try { speechSynthesis.cancel(); } catch(e){} try { if(clipAudio){ clipAudio.pause(); clipAudio = null; } } catch(e){} };
 
 /* recorder */
 const REC = { stream:null, rec:null, chunks:[], url:null, on:false };
@@ -308,8 +376,8 @@ const VIEWS = {
       <p class="muted small" style="margin:0 0 12px">This paragraph answers half the interview before it is asked. Build yours from the model, then learn it by heart.</p>
       <button class="btn ghost block" data-a="openStory">Open the builder</button>`)}
 
-    ${!hasRo() ? card(`<div class="card-title serif" style="margin-bottom:8px">${ic("ear",26)}<div>Add the Romanian voice</div></div>
-      <p class="muted small" style="margin:0 0 10px">No Romanian voice is installed on this phone, so the app is reading Romanian with ${esc((pickVoice()||{}).name || "another")} instead. The words are right, the accent isn't. To fix it: Settings → Accessibility → Spoken Content → Voices → Romanian, download a voice, then come back and pick it below.</p>
+    ${(!hasRo() && S.settings.audio === "voice") ? card(`<div class="card-title serif" style="margin-bottom:8px">${ic("ear",26)}<div>Add the Romanian voice</div></div>
+      <p class="muted small" style="margin:0 0 10px">Audio is playing from the recordings built into the app, so it works without any setup. They are machine-made and flat. For a natural voice: Settings → Accessibility → Spoken Content → Voices → Romanian, download Ioana, then set Audio source below to your phone's voice.</p>
       <button class="btn sm" data-a="testVoice">Test the audio</button>`,"warn-card") : ""}
 
     ${card(`<div class="card-head"><div class="card-title serif">${ic("gear",26)}<div>Settings</div></div></div>
@@ -318,7 +386,11 @@ const VIEWS = {
         <div class="seg small"><button class="${G()==="f"?"on":""}" data-a="setGender" data-g="f">Woman</button><button class="${G()==="m"?"on":""}" data-a="setGender" data-g="m">Man</button></div></div>
       <div class="row"><div class="name">Interview date</div><input class="field sm" type="date" style="width:160px" value="${esc(S.settings.interviewDate)}" data-k="interviewDate"></div>
       <div class="row"><div class="name">Voice speed<small>slower is easier to copy</small></div><input class="field sm" style="width:80px;text-align:right" inputmode="decimal" value="${S.settings.rate}" data-k="rate"></div>
-      <div class="row"><div class="name">Voice<small>${esc(voiceLabel())}</small></div><select class="field sm" style="max-width:180px" data-k="voice"><option value="">Automatic</option>${voices.map(v=>`<option ${v.name===S.settings.voice?"selected":""}>${(/^ro/i.test(v.lang)?"★ ":"")+esc(v.name)+" · "+esc(v.lang)}</option>`).join("")}</select></div>
+      <div class="row"><div class="name">Audio<small>${S.settings.audio==="voice"?"your phone's voice":"recorded clips built into the app"}</small></div>
+        <div class="seg small"><button class="${S.settings.audio!=="voice"?"on":""}" data-a="setAudio" data-v="clips">Recorded</button><button class="${S.settings.audio==="voice"?"on":""}" data-a="setAudio" data-v="voice">Phone voice</button></div></div>
+      <div class="row"><div class="name">Phone voice<small>${esc(voiceLabel())}</small></div><select class="field sm" style="max-width:180px" data-k="voice"><option value="">Automatic</option>${voices.map(v=>`<option ${v.name===S.settings.voice?"selected":""}>${(/^ro/i.test(v.lang)?"★ ":"")+esc(v.name)+" · "+esc(v.lang)}</option>`).join("")}</select></div>
+      <div class="row"><div class="name">Audio source<small>${S.settings.audio==="voice"?"your phone's own voice":"the recordings that ship with the app"}</small></div>
+        <select class="field sm" style="width:170px" data-k="audio">${[["auto","Built-in recordings"],["voice","My phone's voice"]].map(([v,l])=>`<option value="${v}" ${v===(S.settings.audio||"auto")?"selected":""}>${l}</option>`).join("")}</select></div>
       <div class="row"><div class="name">Test the audio<small>you should hear: Bună ziua</small></div><button class="btn sm" data-a="testVoice">Play</button></div>
       <div class="row"><div class="name">Record my speaking</div><button class="switch ${S.settings.mic?"on":""}" data-a="toggleMic"></button></div>
       <div class="row"><div class="name">Appearance</div><select class="field sm" style="width:130px" data-k="theme">${[["royal","Royal (dark)"],["light","Light"]].map(([v,l])=>`<option value="${v}" ${v===S.settings.theme?"selected":""}>${l}</option>`).join("")}</select></div>
@@ -441,7 +513,7 @@ const PRACTICE = {
     <button class="btn ghost block" data-a="startCards">Deal the cards</button>`)}`;
  },
  listen(){
-  return `${!hasRo() ? card(`<p class="muted small" style="margin:0">These drills are being read by ${esc((pickVoice()||{}).name || "a non-Romanian voice")}, because no Romanian voice is installed. Add one in iPhone Settings → Accessibility → Spoken Content → Voices → Romanian for the real accent.</p>`,"warn-card") : ""}
+  return `${(!hasRo() && S.settings.audio === "voice") ? card(`<p class="muted small" style="margin:0">These drills use the recordings built into the app. For a natural Romanian voice, install one in iPhone Settings → Accessibility → Spoken Content → Voices → Romanian, then switch Audio source in Settings.</p>`,"warn-card") : ""}
   ${Object.keys(LISTEN).map(k=>{ const d = LISTEN[k], st = drillStats(d.kind);
     return card(`<div class="card-head" style="margin-bottom:8px"><div class="card-title serif" style="font-size:15px">${esc(d.name)}<small>${esc(d.desc)}</small></div>
       ${st.n?`<span class="badge ${st.recent>=80?"good":st.recent>=60?"warn":"bad"}">${Math.round(st.recent)}%</span>`:""}</div>
@@ -820,7 +892,12 @@ const ACTIONS = {
  setGender(b){ S.settings.gender = b.dataset.g; save(); render(true); },
  toggleMic(){ S.settings.mic = !S.settings.mic; save(); render(true); },
  say(b){ speak(b.dataset.t); },
- testVoice(){ loadVoices(); speak("Bună ziua! Mă numesc Esther. Îmi place foarte mult mâncarea românească.", null); toast(voiceLabel()); render(true); },
+ testVoice(){ loadVoices(); const t = "Bună ziua! Mă numesc Esther.";
+   speak(t, null);
+   toast(S.settings.audio === "voice" ? voiceLabel() : (clipFor(t) ? "Playing the recorded clip" : "No clip found — using the phone voice"));
+   render(true); },
+ setAudio(b){ S.settings.audio = b.dataset.v; save(); stopSpeak(); render(true);
+   speak("Bună ziua!", null); },
  sayText(b){ speak(b.dataset.t); },
  openSession(b){ UI.session = b.dataset.id; UI.view = "session"; render(); },
  closeSession(){ UI.view = null; UI.tab = UI.tab === "home" ? "home" : "course"; render(); },
@@ -950,6 +1027,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   const el = e.target, k = el.dataset && el.dataset.k; if(!k) return;
   if(k === "theme"){ S.settings.theme = el.value; save(); applyTheme(); return; }
+  if(k === "audio"){ S.settings.audio = el.value; save(); render(true); return; }
   if(k === "voice"){ S.settings.voice = el.value; save(); return; }
 });
 

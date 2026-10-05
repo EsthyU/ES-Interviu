@@ -1,5 +1,5 @@
-const VERSION = "esinterviu-v2";
-const SHELL = ["./","./index.html","./app.js","./content-ref.js","./content-course.js","./manifest.json","./icon-192.png","./icon-512.png","./apple-touch-icon.png"];
+const VERSION = "esinterviu-v4";
+const SHELL = ["./","./index.html","./app.js","./content-ref.js","./content-course.js","./audio-index.js","./audio.mp3","./manifest.json","./icon-192.png","./icon-512.png","./apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==VERSION).map(x=>caches.delete(x)))).then(()=>self.clients.claim())); });
 self.addEventListener("fetch", e => {

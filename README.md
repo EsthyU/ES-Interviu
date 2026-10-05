@@ -12,6 +12,7 @@ Plain files, no build step. Everything you write and every score stays on your d
 | `app.js` | The app: course reader, drills, simulator, exam, marking |
 | `content-ref.js` | Pronunciation, grammar, survival phrases, the 18 questions, the exam |
 | `content-course.js` | All ten sessions: officer questions, answer bank, notes, homework and keys |
+| `audio.mp3`, `audio-index.js` | All 356 Romanian recordings in one file, plus the index |
 | `manifest.json`, `sw.js` | Installable and offline |
 | icon files | App icons |
 
@@ -21,13 +22,13 @@ Plain files, no build step. Everything you write and every score stays on your d
 2. Settings → Pages → Deploy from a branch → `main` → `/ (root)` → Save.
 3. Open `https://esthyu.github.io/ES-Interviu/` in Safari, then Share → Add to Home Screen.
 
-## The Romanian voice
+## Audio
 
-iPhones speak Romanian properly only if a Romanian voice is installed: **Settings → Accessibility → Spoken Content → Voices → Romanian**, and download one.
+The app ships with its own Romanian audio in a single file, `audio.mp3` (about 3.4 MB), with `audio-index.js` saying where each phrase sits inside it. Sound works the moment you open the app, with no setup, online or offline. The recordings are machine-made, so they are clear and correctly stressed but flat.
 
-Without it the app no longer stays silent. It falls back to the closest voice your phone has, in this order: Romanian, Italian, Spanish, Portuguese, Catalan, French, then anything. The words are correct, the accent is not, so install the Romanian voice before you trust the pronunciation.
+For a natural voice, install one on the phone: **Settings → Accessibility → Spoken Content → Voices → Romanian**, download **Ioana**, then in the app go to Home → Settings and set **Audio source** to *My phone's voice*.
 
-Under Settings on the Home tab there is a **Test the audio** button and a line naming the voice in use. If you hear nothing at all: check the silent switch on the side of the phone, turn the volume up, and tap any play button once (iPhone only allows sound after a tap).
+Home → Settings also has **Test the audio**, which plays a line and tells you which source produced it. If you hear nothing: check the silent switch on the side of the phone, turn the volume up, and tap once anywhere first, because iPhones only allow sound after a tap.
 
 ## What's inside
 
